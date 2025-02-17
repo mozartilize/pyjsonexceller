@@ -1,6 +1,13 @@
 import pytest
 
-from pyjsonexceller.transform import execute_expr, TupleTransformer, LiteralTransformer, ExprTransformer, ListTransformer, ObjectTransformer
+from pyjsonexceller.transform import (
+    execute_expr,
+    TupleTransformer,
+    LiteralTransformer,
+    ExprTransformer,
+    ListTransformer,
+    ObjectTransformer,
+)
 
 
 @pytest.mark.parametrize(
@@ -96,18 +103,19 @@ def test_list():
     schema = {
         "type": "list",
         "mapping": {
-            "iter": "$0.rec",
+            "iter": ["$0.rec"],
             "each": {
                 "type": "object",
                 "mapping": {
-                    "id": {"type": "expr", "mapping": ["concat", "id_", ["str", "$0.loop_index"]]},
+                    "id": {
+                        "type": "expr",
+                        "mapping": ["concat", "id_", ["str", "$0.loop_index"]],
+                    },
                     "val": {"type": "expr", "mapping": ["$0.loop_item"]},
-                }
-            }
+                },
+            },
         },
-        "ctx": {
-            "rec": [1, 2, 3, 4]
-        }
+        "ctx": {"rec": [1, 2, 3, 4]},
     }
 
     t = ListTransformer(schema)
@@ -139,3 +147,25 @@ def test_object():
 
     t = ObjectTransformer(schema)
     assert t() == {"id": "hello"}
+
+
+@pytest.mark.parametrize("plugins,expr", [
+    (["datetime:datetime"], ["$1.datetime:strptime", "$0.datestr", "%Y-%m-%d"]),
+    ([{"datetime": "datetime:datetime"}], ["$1.datetime:strptime", "$0.datestr", "%Y-%m-%d"]),
+    (["datetime", {"datetime": ["$1.datetime:datetime"]}], ["$1.datetime:strptime", "$0.datestr", "%Y-%m-%d"]),
+    (["datetime", ["$1.datetime:datetime"]], ["$1.datetime:strptime", "$0.datestr", "%Y-%m-%d"]),
+    (["datetime", ["getattr", "$1.datetime", "datetime"]], [["getattr", "$1.datetime", "strptime"], "$0.datestr", "%Y-%m-%d"]),
+])
+def test_plugins(plugins, expr):
+    schema = {
+        "type": "expr",
+        "mapping": expr,
+        "ctx": {
+            "datestr": "2024-12-02"
+        },
+        "plugins": plugins
+    }
+
+    t = ExprTransformer(schema)
+    from datetime import datetime
+    assert t() == datetime(2024, 12, 2)

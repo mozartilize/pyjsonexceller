@@ -1,7 +1,7 @@
 [project]
 name = "pyjsonexceller"
-version = "0.1.0a1"
-description = "JSON to JSON (transformer) with Excel-like expression"
+version = "0.1.0a2"
+description = "JSON to JSON (transformer) with Excel inprised expression"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []

@@ -1,6 +1,6 @@
 # pyobjexceller
 
-JSON to JSON (transformer) with Excel-like expression
+JSON to JSON (transformer) with Excel inprised expression
 
 ## Example
 
@@ -9,6 +9,7 @@ Define a json schema:
 ```json
 {
     "type": "expr",
+    // $0 is the ctx (context) register
     "mapping": ["$0.rec"],
     "ctx": {
         "rec": {
@@ -39,3 +40,53 @@ assert t() == {
 ```
 
 Check `tests` for more usage.
+
+## Schema definition
+
+```python
+SchemaTransformerType = t.TypedDict(
+    "SchemaTransformerType",
+    {
+        "type": str,
+        "mapping": t.Any,
+        "ctx": te.NotRequired[dict[str, t.Any]],
+        "plugins": te.NotRequired[dict[str, t.Any]],
+        "if": te.NotRequired[ExprType],
+    },
+)
+
+
+class LiteralTransformer(Transformer):
+    _mapping: t.Any
+
+
+ExprType = list[t.Union[t.Any, "ExprType"]]
+class ExprTransformer(Transformer):
+    _mapping: ExprType
+
+
+class TupleTransformer(Transformer):
+    _mapping: list[SchemaTransformerType]
+
+
+ListTransformerMappingType = t.TypedDict(
+    "ListTransformerMappingType",
+    {"iter": ExprType, "each": SchemaTransformerType},
+)
+class ListTransformer(Transformer):
+    _mapping: ListTransformerMappingType
+
+
+class ObjectTransformer(Transformer):
+    _mapping: dict[str, SchemaTransformerType]
+```
+
+## Registers
+
+You can access external data via registers.
+
+There're currently 2 registers:
+
+- Context `$0`
+
+- Plugins `$1`

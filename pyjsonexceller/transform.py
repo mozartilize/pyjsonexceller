@@ -1,8 +1,9 @@
 import builtins
 import operator
+import types
 import typing as t
-from collections.abc import Iterable
 from enum import Enum
+from importlib import import_module
 
 import typing_extensions as te
 
@@ -115,19 +116,51 @@ def transformer_factory(
 class Transformer:
     _schema: SchemaTransformerType
     _ctx: dict[str, t.Any]
-    _plugins: dict[str, t.Any]
+    _plugins: dict[str, t.Callable[..., t.Any] | types.ModuleType]
     _mapping: t.Any
 
     def __init__(
         self,
         schema: SchemaTransformerType,
         context: t.Optional[dict[str, t.Any]] = None,
-        plugins: t.Optional[dict[str, t.Any]] = None,
+        plugins: t.Optional[dict[str, t.Callable[..., t.Any]]] = None,
     ) -> None:
         self._schema = schema
         self._ctx = {**self._schema.get("ctx", {}), **(context or {})}
-        self._plugins = {**self._schema.get("plugins", {}), **(plugins or {})}
+        self._plugins = self._load_plugins(plugins or {})
         self._mapping = self._schema["mapping"]
+
+    def _load_plugins(self, additional_plugins: dict[str, t.Callable[..., t.Any] | types.ModuleType]):
+        schema_plugins = {**(additional_plugins or {})}
+        for plugin_def in self._schema.get("plugins", []):
+            if isinstance(plugin_def, str):
+                if ":" in plugin_def:
+                    module_path, attrname = plugin_def.split(":")
+                else:
+                    module_path = plugin_def
+                    attrname = None
+                plugin = import_module(module_path)
+                if attrname:
+                    plugin = getattr(plugin, attrname)
+                schema_plugins[plugin.__name__] = plugin
+            elif isinstance(plugin_def, list):
+                plugin = execute_expr(plugin_def, None, schema_plugins)
+                schema_plugins[plugin.__name__] = plugin
+            elif isinstance(plugin_def, dict):
+                plugin_name: str = tuple(plugin_def.keys())[0]
+                if isinstance(plugin_def[plugin_name], list):
+                    plugin = execute_expr(plugin_def[plugin_name], None, schema_plugins)
+                elif isinstance(plugin_def[plugin_name], str):
+                    if ":" in plugin_def[plugin_name]:
+                        module_path, attrname = plugin_def[plugin_name].split(":")
+                    else:
+                        module_path = plugin_def[plugin_name]
+                        attrname = None
+                    plugin = import_module(module_path)
+                    if attrname:
+                        plugin = getattr(plugin, attrname)
+                schema_plugins[plugin_name] = plugin
+        return schema_plugins
 
 
 class LiteralTransformer(Transformer):
@@ -151,7 +184,7 @@ class TupleTransformer(Transformer):
 
 ListTransformerMappingType = t.TypedDict(
     "ListTransformerMappingType",
-    {"iter": t.Union[str, ExprType], "each": SchemaTransformerType},
+    {"iter": ExprType, "each": SchemaTransformerType},
 )
 
 
@@ -159,20 +192,11 @@ class ListTransformer(Transformer):
     _mapping: ListTransformerMappingType
 
     def __call__(self):
-        iterable_def = self._mapping["iter"]
-        iterable: t.Optional[Iterable[t.Any]] = None
-        if isinstance(iterable_def, str):
-            if iterable_def.startswith("$0."):
-                iterable = self._ctx[iterable_def[3:]]
-            elif iterable_def.startswith("$1."):
-                plugin_path = iterable_def[3:]
-                plugin_name, attr_name = plugin_path.split(":")
-                iterable = getattr(self._plugins[plugin_name], attr_name)
-        else:
-            iterable = execute_expr(iterable_def, self._ctx, self._plugins)
+        iterable_expr = self._mapping["iter"]
+        iterable = execute_expr(iterable_expr, self._ctx, self._plugins)
 
         if not iterable:
-            raise TypeError(f"invalid `iter` definition, {iterable_def} is not iterable")
+            raise TypeError(f"invalid `iter` definition, {iterable_expr} is not iterable")
 
         ret = []
         for loop_index, loop_item in enumerate(iterable):
@@ -237,11 +261,8 @@ def execute_expr(
             raise TypeError(f"Invalid {expr}")
         return ret
 
-    func: str = expr[0]
-    args = expr[1:]
-
     eval_args = []
-    for arg in args:
+    for arg in expr[1:]:
         if isinstance(arg, list):
             ret = execute_expr(arg, context, plugins)
             eval_args.append(ret)
@@ -251,15 +272,25 @@ def execute_expr(
                 eval_args.append(ret)
             elif arg.startswith("$1."):
                 plugin_path = arg[3:]
-                plugin_name, attr_name = plugin_path.split(":")
-                ret = getattr(plugins[plugin_name], attr_name)
+                if ":" in plugin_path:
+                    plugin_name, attrname = plugin_path.split(":")
+                else:
+                    plugin_name = plugin_path
+                    attrname = None
+                ret = plugins[plugin_name]
+                if attrname:
+                    ret = getattr(ret, attrname)
                 eval_args.append(ret)
             else:
                 eval_args.append(arg)
         else:
             eval_args.append(arg)
+    
+    func = expr[0]
 
-    if func == "if":
+    if isinstance(func, list):
+        _func = execute_expr(func, None, plugins)
+    elif func == "if":
         return eval_args[1] if eval_args[0] else eval_args[2]
     elif func.startswith("."):
         # it's first arg's method
@@ -267,17 +298,23 @@ def execute_expr(
         try:
             _func = getattr(eval_args[0], func[1:])
         except AttributeError:
-            raise FunctionNotFoundError(f"Method `{func[1:]}` not found in {args[0]}")
+            raise FunctionNotFoundError(f"Method `{func[1:]}` not found in {expr[1]}")
 
         eval_args.pop(0)
     elif func.startswith("$1."):
         plugin_path = func[3:]
-        plugin_name, func_name = plugin_path.split(".")
+        if ":" in plugin_path:
+            plugin_name, attrname = plugin_path.split(":")
+        else:
+            plugin_name = plugin_path
+            attrname = None
         try:
-            _func = getattr(plugins[plugin_name], func_name)
-        except AttributeError:
+            _func = plugins[plugin_name]
+            if attrname:
+                _func = getattr(_func, attrname)
+        except (AttributeError, KeyError):
             raise FunctionNotFoundError(
-                f"Method `{func_name}` not found in plugin {plugin_name}"
+                f"Function `{plugin_path}` not found"
             )
     else:
         try:
