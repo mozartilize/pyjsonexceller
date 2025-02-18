@@ -35,6 +35,7 @@ SchemaTransformerType = t.TypedDict(
         "ctx": te.NotRequired[dict[str, t.Any]],
         "plugins": te.NotRequired[dict[str, t.Any]],
         "if": te.NotRequired[ExprType],
+        "computed": te.NotRequired[dict[str, "SchemaTransformerType"]],
     },
 )
 
@@ -73,6 +74,7 @@ class Transformer:
     _ctx: dict[str, t.Any]
     _plugins: dict[str, t.Union[t.Callable[..., t.Any], types.ModuleType]]
     _mapping: t.Any
+    _computed: dict[str, t.Any]
 
     def __init__(
         self,
@@ -86,6 +88,18 @@ class Transformer:
         self._ctx = {**self._schema.get("ctx", {}), **(context or {})}
         self._plugins = self._load_plugins(plugins or {})
         self._mapping = self._schema["mapping"]
+        self._computed = {}
+        self._computed_resolved: bool = False
+
+    def _resolve_computed(self):
+        if self._schema.get("computed"):
+            self._computed = {
+                var: transformer_factory(st, self._ctx, self._plugins)()
+                for var, st in t.cast(
+                    dict[str, "SchemaTransformerType"], self._schema.get("computed")
+                ).items()
+            }
+        self._computed_resolved = True
 
     def _load_plugins(
         self,
@@ -128,6 +142,9 @@ class Transformer:
         raise NotImplementedError()  # pragma: no cover
 
     def __call__(self) -> t.Any:
+        if not self._computed_resolved:
+            self._resolve_computed()
+            self._ctx.update(self._computed)
         return self._resolve()
 
 
