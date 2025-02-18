@@ -2,9 +2,13 @@ class FunctionNotFoundError(Exception):
     pass
 
 
-class PluginNotFoundError(Exception):
+class PluginError(Exception):
     pass
 
 
-class AttributeNotFound(Exception):
+class PluginDefinitionError(PluginError):
+    pass
+
+
+class PluginNotFoundError(PluginError):
     pass
