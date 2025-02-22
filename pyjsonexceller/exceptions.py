@@ -1,4 +1,4 @@
-class FunctionNotFoundError(Exception):
+class FunctionNotFound(Exception):
     pass
 
 
@@ -10,5 +10,5 @@ class PluginDefinitionError(PluginError):
     pass
 
 
-class PluginNotFoundError(PluginError):
+class PluginNotFound(PluginError):
     pass

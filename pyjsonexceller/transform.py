@@ -2,15 +2,17 @@ import builtins
 import operator
 import types
 import typing as t
+from abc import abstractmethod
+from collections.abc import Iterable
 from enum import Enum
 from importlib import import_module
 
 import typing_extensions as te
 
 from pyjsonexceller.exceptions import (
-    FunctionNotFoundError,
-    PluginNotFoundError,
+    FunctionNotFound,
     PluginDefinitionError,
+    PluginNotFound,
 )
 
 
@@ -61,6 +63,8 @@ def _dynamic_import(definition: str):
     attr = import_module(module_path)
     if attrname:
         attr = getattr(attr, attrname)
+        if not hasattr(attr, "__name__"):
+            attr.__name__ = attrname
     return attr
 
 
@@ -107,18 +111,21 @@ class Transformer:
                     elif isinstance(plugin_def[plugin_name], str):
                         plugin = _dynamic_import(plugin_def[plugin_name])
                     else:
-                        raise PluginDefinitionError(f"{plugin_def[plugin_name]}")
+                        raise PluginDefinitionError(f"{plugin_def}")
                     schema_plugins[plugin_name] = plugin
                 else:
                     raise PluginDefinitionError(f"{plugin_def}")
         except ModuleNotFoundError as e:
-            raise PluginDefinitionError(f"No plugin named `{e.name}` installed")
+            raise PluginDefinitionError(f"No module/package `{e.name}` installed")
         except AttributeError as e:
-            raise PluginDefinitionError(f"No attribute named `{e.name}`")
+            raise PluginDefinitionError(
+                f"No attribute `{e.name}` on module/package `{e.obj.__name__}`"
+            )
         return schema_plugins
 
+    @abstractmethod
     def _resolve(self) -> t.Any:
-        raise NotImplementedError()
+        raise NotImplementedError()  # pragma: no cover
 
     def __call__(self) -> t.Any:
         return self._resolve()
@@ -156,7 +163,7 @@ class ListTransformer(Transformer):
         iterable_expr = self._mapping["iter"]
         iterable = execute_expr(iterable_expr, self._ctx, self._plugins)
 
-        if not iterable:
+        if not isinstance(iterable, Iterable):
             raise TypeError(
                 f"invalid `iter` definition, {iterable_expr} is not iterable"
             )
@@ -211,10 +218,10 @@ def _resolve_plugin(plugin_path, plugins):
         if attrname:
             ret = getattr(ret, attrname)
     except KeyError as e:
-        raise PluginNotFoundError(f"{e.args[0]}")
+        raise PluginNotFound(f"{e.args[0]}")
     except AttributeError as e:
         raise AttributeError(
-            f"No attribute `{e.name}` in plugin `{plugin_path}`", e.name, plugin_path
+            f"No attribute `{e.name}` in plugin `{plugin_path}`", name=e.name
         )
     return ret
 
@@ -228,7 +235,7 @@ def _resolve_arg(arg, context, plugins):
                 ret = context[arg[3:]]
             except KeyError as e:
                 raise AttributeError(
-                    f"No attribute `{e.args[0]}` in context", e.args[0], "context"
+                    f"No attribute `{e.args[0]}` in context", name=e.args[0]
                 )
         elif arg.startswith("$1."):
             plugin_path = arg[3:]
@@ -272,7 +279,7 @@ def execute_expr(
             _func = getattr(eval_args[0], func[1:])
             eval_args.pop(0)
         except AttributeError:
-            raise FunctionNotFoundError(f"Method `{func[1:]}` not found in {expr[1]}")
+            raise FunctionNotFound(f"Method `{func[1:]}` not found in {expr[1]}")
 
     elif func.startswith("$1."):
         plugin_path = func[3:]
@@ -284,5 +291,5 @@ def execute_expr(
             try:
                 _func = getattr(builtins, func)
             except AttributeError:
-                raise FunctionNotFoundError(f"Function `{func}` is not supported")
+                raise FunctionNotFound(f"Function `{func}` is not supported")
     return _func(*eval_args)
